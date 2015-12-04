@@ -1,0 +1,76 @@
+#!/usr/bin/python
+from __future__ import division, print_function
+
+import os
+import struct
+import argparse
+
+import floatcoder
+
+struct_fmt = 'f'
+
+def spr_adjust(f, spr):
+    i = struct.unpack('I', struct.pack('f', f))[0]
+    discarded_bits = (1 << spr) - 1
+    i &= 0xffffffff ^ discarded_bits
+    if i & (1 << 31):
+        #FIXME: currently because SPR rounding happens after int-conversion to 2s complement in the encoder, it results in round-towards-infinity behavior instead of round-towards-zero, which means we need to set the last bits to all-1s if the number is negative here to match that behavior.  Round-towards-zero would arguably be preferable behavior.. Just need to figure out a not-overly-complex way to do that instead in the encoder.
+        i ^= discarded_bits
+    return struct.unpack('f', struct.pack('I', i))[0]
+
+def floathex(f):
+    i = struct.unpack('I', struct.pack('f', f))[0]
+    return "{:08x}".format(i)
+
+parser = argparse.ArgumentParser(description='Test floatcoder.py')
+parser.add_argument('infile', metavar='INFILE', type=str, help='Input file (raw data)')
+parser.add_argument('outfile', metavar='OUTFILE', type=str, help='Output file (compressed data)')
+parser.add_argument('--count', type=int, help='Number of floats to read from input')
+parser.add_argument('--interleave', type=int, default=3, help='Stride for interleaved data')
+parser.add_argument('--spr', type=int, default=0, help='Static Precision Reduction value')
+
+args = parser.parse_args()
+
+struct_fmt_size = struct.calcsize(struct_fmt)
+
+infile = open(args.infile, 'rb')
+outfile = open(args.outfile, 'wb')
+
+if not args.count:
+    size = os.fstat(infile.fileno()).st_size
+    args.count = size // struct_fmt_size
+
+print("Compressing {} floats (stride {}) from {!r} to {!r}...".format(args.count, args.interleave, args.infile, args.outfile))
+
+predictor = floatcoder.InterleavedLinearPredictor(args.interleave)
+enc = floatcoder.Float_Encoder(outfile, predictor, spr=args.spr)
+
+for i in xrange(args.count):
+    value = struct.unpack(struct_fmt, infile.read(struct_fmt_size))[0];
+    enc.encode_float(value)
+enc.done()
+
+input_size = args.count * struct_fmt_size
+output_size = os.fstat(outfile.fileno()).st_size
+
+print("-- {} input bytes compressed to {} output bytes ({:.3}%)".format(input_size, output_size, (output_size / input_size) * 100))
+
+infile.close()
+outfile.close()
+
+print("Verifying result...")
+
+infile = open(args.infile, 'rb')
+outfile = open(args.outfile, 'rb')
+
+predictor = floatcoder.InterleavedLinearPredictor(args.interleave)
+dec = floatcoder.Float_Decoder(outfile, predictor, spr=args.spr)
+
+for i in xrange(args.count):
+    infile_value = struct.unpack(struct_fmt, infile.read(struct_fmt_size))[0];
+    infile_value = spr_adjust(infile_value, args.spr)
+    outfile_value = dec.decode_float()
+    if infile_value != outfile_value:
+        print("VALUE ERROR: Value number {}: expected {} ({}), got {} ({}) (off by {})".format(i, infile_value, floathex(infile_value), outfile_value, floathex(outfile_value), outfile_value - infile_value))
+dec.done()
+

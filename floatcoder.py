@@ -59,13 +59,10 @@ class Encoder:
     # encode a literal binary number into the output stream:
     # 0 <= value < 2^bits <= 2^16
     def encode_value(self, value, bits):
-        if bits > 16:
-            log("encode_value: value=0x{:x} ({})".format(value, bits))
         while bits > 16:
             self.encode_value(value >> (bits - 16), 16)
             bits -= 16
             value &= (1 << bits) - 1
-        log("encode_value: 0x{:04x}/{}".format(value, bits))
         self.range >>= bits
         self.low += value * self.range
         self.normalize()
@@ -159,7 +156,6 @@ class Decoder:
             raise ValueError("Bad compressed data")
         self.low += value * self.range
         self.normalize()
-        log("decode_value: 0x{:x}".format(value))
         return value
 
     def normalize(self):
@@ -186,18 +182,19 @@ class Float_Encoder:
             self.rc = Encoder(outfile, model)
         self.spr = spr
         self.spr_mask = 0xffffffff ^ ((1 << spr) - 1)
+        self.count = 0
 
     def encode_float(self, v):
         #FIXME: eventually need to convert to int prior to prediction step (for portability)
-        p = float_to_int(self.predictor.next())
-        i = float_to_int(v)
-        d = (i - p) & self.spr_mask
-        log("v={}, i={:08x}, p={:08x}, d={:08x}".format(v, i, p, d))
+        p = float_to_int(self.predictor.next()) & self.spr_mask
+        i = float_to_int(v) & self.spr_mask
+        d = (i - p) & 0xffffffff
+        log("E:{}: v={}, i={:08x}, p={:08x}, d={:08x}".format(self.count, v, i, p, d))
         self.encode(d)
-        self.predictor.update(int_to_float((p + d) & 0xffffffff))
+        self.predictor.update(int_to_float(i))
+        self.count += 1
 
     def encode(self, value):
-        log("Encoding {:08x}".format(value))
         if not (value & (1 << 31)):
             # Positive value
             zeros = count_zeros(value)
@@ -234,14 +231,17 @@ class Float_Decoder:
             model = qsmodel.QSModel(64, MODEL_BITS, 2000, compress=False)
             self.rc = Decoder(infile, model)
         self.spr = spr
+        self.spr_mask = 0xffffffff ^ ((1 << spr) - 1)
+        self.count = 0
 
     def decode_float(self):
-        p = float_to_int(self.predictor.next())
+        p = float_to_int(self.predictor.next()) & self.spr_mask
         d = self.decode()
         i = (p + d) & 0xffffffff
         v = int_to_float(i)
-        log("v={}, i={:08x}, p={:08x}, d={:08x}".format(v, i, p, d))
+        log("D:{}: v={}, i={:08x}, p={:08x}, d={:08x}".format(self.count, v, i, p, d))
         self.predictor.update(v)
+        self.count += 1
         return v
 
     def decode(self):
@@ -261,7 +261,7 @@ class Float_Decoder:
         value <<= self.spr
         log("- value=0x{:x} ({})".format(value, bits))
         if sign:
-            value ^= 0xffffffff
+            value ^= self.spr_mask
         return value
 
     def done(self):
