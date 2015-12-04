@@ -7,7 +7,7 @@ import sys
 def log(msg):
     sys.stderr.write(str(msg) + '\n')
 
-MODEL_BITS = 12
+MODEL_BITS = 16
 RANGE_TOP = (1 << 32) - 1
 
 def count_zeros(value):
@@ -85,6 +85,35 @@ class Encoder:
             self.putbyte()
 
 
+class NoOpEncoder:
+    def __init__(self, outfile, sym_size):
+        self.outfile = outfile
+        self.sym_size = sym_size
+        self.buffer = 0
+        self.bits = 0
+
+    def putbyte(self):
+        c = self.buffer >> (self.bits - 8)
+        log(" -- write: 0x{:02x}".format(c))
+        self.outfile.write(chr(c))
+        self.bits -= 8
+        self.buffer &= (1 << self.bits) - 1
+
+    def encode_sym(self, sym):
+        self.encode_value(sym, self.sym_size)
+
+    def encode_value(self, value, bits):
+        self.buffer = (self.buffer << bits) | value
+        self.bits += bits
+        while self.bits >= 8:
+            self.putbyte()
+
+    def done(self):
+        self.buffer <<= (8 - self.bits)
+        self.bits = 8
+        self.putbyte()
+
+
 class Decoder:
     def __init__(self, infile, model):
         self.infile = infile
@@ -148,19 +177,24 @@ class Decoder:
 
 
 class Float_Encoder:
-    def __init__(self, outfile, predictor):
+    def __init__(self, outfile, predictor, coder=None, spr=0):
         self.predictor = predictor
-        model = qsmodel.QSModel(64, MODEL_BITS, 2000)
-        self.rc = Encoder(outfile, model)
+        if coder:
+            self.rc = coder
+        else:
+            model = qsmodel.QSModel(64, MODEL_BITS, 2000)
+            self.rc = Encoder(outfile, model)
+        self.spr = spr
+        self.spr_mask = 0xffffffff ^ ((1 << spr) - 1)
 
     def encode_float(self, v):
         #FIXME: eventually need to convert to int prior to prediction step (for portability)
         p = float_to_int(self.predictor.next())
         i = float_to_int(v)
-        d = (i - p) & 0xffffffff
+        d = (i - p) & self.spr_mask
         log("v={}, i={:08x}, p={:08x}, d={:08x}".format(v, i, p, d))
         self.encode(d)
-        self.predictor.update(v)
+        self.predictor.update(int_to_float((p + d) & 0xffffffff))
 
     def encode(self, value):
         log("Encoding {:08x}".format(value))
@@ -180,8 +214,9 @@ class Float_Encoder:
         log("- sym=0x{:02x}".format(sym))
         self.rc.encode_sym(sym)
         # First bit after zeros is (by definition) always 1, so no need to send it.
-        bits = 32 - zeros - 1
+        bits = 32 - zeros - 1 - self.spr
         if bits > 0:
+            value >>= self.spr
             range = 1 << bits
             log("- value=0x{:x} ({})".format(value ^ range, bits))
             self.rc.encode_value(value ^ range, bits)
@@ -191,10 +226,14 @@ class Float_Encoder:
 
 
 class Float_Decoder:
-    def __init__(self, infile, predictor):
+    def __init__(self, infile, predictor, coder=None, spr=0):
         self.predictor = predictor
-        model = qsmodel.QSModel(64, MODEL_BITS, 2000, compress=False)
-        self.rc = Decoder(infile, model)
+        if coder:
+            self.rc = coder
+        else:
+            model = qsmodel.QSModel(64, MODEL_BITS, 2000, compress=False)
+            self.rc = Decoder(infile, model)
+        self.spr = spr
 
     def decode_float(self):
         p = float_to_int(self.predictor.next())
@@ -210,7 +249,7 @@ class Float_Decoder:
         log("- sym=0x{:02x}".format(sym))
         sign = sym >> 5
         zeros = (sym & 0x1f) + 1
-        bits = 32 - zeros - 1
+        bits = 32 - zeros - 1 - self.spr
         log("- zeros={} bits={}".format(zeros, bits))
         if bits > 0:
             range = 1 << bits
@@ -219,6 +258,7 @@ class Float_Decoder:
             value = 1
         else:
             value = 0
+        value <<= self.spr
         log("- value=0x{:x} ({})".format(value, bits))
         if sign:
             value ^= 0xffffffff
