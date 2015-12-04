@@ -1,0 +1,28 @@
+#!/usr/bin/python
+
+import sys
+
+from qsmodel import *
+
+coder = __import__(sys.argv[1] + '_rc')
+
+MODEL_BITS = 12
+EOF_SYM = 256
+
+qsm = QSModel(257, MODEL_BITS, 2000, compress=False)
+rc = coder.Decoder(sys.stdin)
+
+tot_freq = 1 << MODEL_BITS
+
+while True:
+    cum_freq = rc.decode_freq(tot_freq)
+    ch = qsm.getsym(cum_freq)
+    sym_freq, cum_freq = qsm.getfreq(ch)
+    rc.update(sym_freq, cum_freq, tot_freq)
+    if ch == EOF_SYM:
+        break
+    sys.stdout.write(chr(ch))
+    qsm.update(ch)
+
+rc.done()
+

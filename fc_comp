@@ -1,0 +1,16 @@
+#!/usr/bin/python
+from __future__ import division, print_function
+
+import sys
+import struct
+from floatcoder import *
+
+predictor = InterleavedLinearPredictor(3)
+enc = Float_Encoder(sys.stdout, predictor)
+
+count = int(sys.argv[1])
+
+for i in xrange(count):
+    value = struct.unpack('f', sys.stdin.read(4))[0];
+    enc.encode_float(value)
+enc.done()
