@@ -28,10 +28,13 @@ parser.add_argument('outfile', metavar='OUTFILE', type=str, help='Output file (c
 parser.add_argument('--count', type=int, help='Number of floats to read from input')
 parser.add_argument('--interleave', type=int, default=3, help='Stride for interleaved data')
 parser.add_argument('--spr', type=int, default=0, help='Static Precision Reduction value')
+parser.add_argument('-v', '--verbose', action='store_true', help='Print debugging info to stderr')
 
 args = parser.parse_args()
 
 struct_fmt_size = struct.calcsize(struct_fmt)
+
+floatcoder.verbose = args.verbose
 
 infile = open(args.infile, 'rb')
 outfile = open(args.outfile, 'wb')
@@ -51,6 +54,7 @@ for i in xrange(args.count):
 enc.done()
 
 input_size = args.count * struct_fmt_size
+outfile.flush()
 output_size = os.fstat(outfile.fileno()).st_size
 
 print("-- {} input bytes compressed to {} output bytes ({:.3}%)".format(input_size, output_size, (output_size / input_size) * 100))

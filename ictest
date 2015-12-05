@@ -1,0 +1,65 @@
+#!/usr/bin/python
+from __future__ import division, print_function
+
+import os
+import struct
+import argparse
+
+import intcoder
+
+struct_fmt = 'I'
+
+parser = argparse.ArgumentParser(description='Test intcoder.py')
+parser.add_argument('infile', metavar='INFILE', type=str, help='Input file (raw data)')
+parser.add_argument('outfile', metavar='OUTFILE', type=str, help='Output file (compressed data)')
+parser.add_argument('--count', type=int, help='Number of ints to read from input')
+parser.add_argument('--interleave', type=int, default=3, help='Stride for interleaved data')
+parser.add_argument('-v', '--verbose', action='store_true', help='Print debugging info to stderr')
+
+args = parser.parse_args()
+
+struct_fmt_size = struct.calcsize(struct_fmt)
+
+intcoder.verbose = args.verbose
+
+infile = open(args.infile, 'rb')
+outfile = open(args.outfile, 'wb')
+
+if not args.count:
+    size = os.fstat(infile.fileno()).st_size
+    args.count = size // struct_fmt_size
+
+print("Compressing {} ints (stride {}) from {!r} to {!r}...".format(args.count, args.interleave, args.infile, args.outfile))
+
+predictor = intcoder.InterleavedSimplePredictor(args.interleave)
+enc = intcoder.Int_Encoder(outfile, predictor)
+
+for i in xrange(args.count):
+    value = struct.unpack(struct_fmt, infile.read(struct_fmt_size))[0];
+    enc.encode_int(value)
+enc.done()
+
+input_size = args.count * struct_fmt_size
+outfile.flush()
+output_size = os.fstat(outfile.fileno()).st_size
+
+print("-- {} input bytes compressed to {} output bytes ({:.4}%)".format(input_size, output_size, (output_size / input_size) * 100))
+
+infile.close()
+outfile.close()
+
+print("Verifying result...")
+
+infile = open(args.infile, 'rb')
+outfile = open(args.outfile, 'rb')
+
+predictor = intcoder.InterleavedSimplePredictor(args.interleave)
+dec = intcoder.Int_Decoder(outfile, predictor)
+
+for i in xrange(args.count):
+    infile_value = struct.unpack(struct_fmt, infile.read(struct_fmt_size))[0];
+    outfile_value = dec.decode_int()
+    if infile_value != outfile_value:
+        print("VALUE ERROR: Value number {}: expected {} (0x{:08x}), got {} (0x{:08x}) (off by {})".format(i, infile_value, infile_value, outfile_value, outfile_value, outfile_value - infile_value))
+dec.done()
+

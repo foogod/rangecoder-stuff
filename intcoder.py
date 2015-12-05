@@ -1,7 +1,6 @@
 from __future__ import division
 
 import qsmodel
-import struct
 
 import sys
 
@@ -20,22 +19,6 @@ def count_zeros(value):
         value >>= 1
         result -= 1
     return result
-
-def float_to_int(f):
-    i = struct.unpack('I', struct.pack('f', f))[0]
-    if i & (1 << 31):
-        i ^= 0xffffffff
-    else:
-        i ^= (1 << 31)
-    return i
-
-def int_to_float(i):
-    if i & (1 << 31):
-        i ^= (1 << 31)
-    else:
-        i ^= 0xffffffff
-    f = struct.unpack('f', struct.pack('I', i))[0]
-    return f
 
 class EOFError (Exception):
     pass
@@ -176,97 +159,229 @@ class Decoder:
         pass
 
 
-class Float_Encoder:
-    def __init__(self, outfile, predictor, coder=None, spr=0):
+# IntZ -- Code initial zeros + residual.
+
+class IntZ_Encoder:
+    def __init__(self, outfile, predictor, coder=None):
         self.predictor = predictor
         if coder:
             self.rc = coder
         else:
-            model = qsmodel.QSModel(64, MODEL_BITS, 2000)
+            model = qsmodel.QSModel(63, MODEL_BITS, 2000)
             self.rc = Encoder(outfile, model)
-        self.spr = spr
-        self.spr_mask = 0xffffffff ^ ((1 << spr) - 1)
         self.count = 0
 
-    def encode_float(self, v):
-        #FIXME: eventually need to convert to int prior to prediction step (for portability)
-        p = float_to_int(self.predictor.next()) & self.spr_mask
-        i = float_to_int(v) & self.spr_mask
-        d = (i - p) & 0xffffffff
-        log("E:{}: v={}, i={:08x}, p={:08x}, d={:08x}".format(self.count, v, i, p, d))
+    def encode_int(self, v):
+        p = self.predictor.next()
+        d = (v - p)
+        log("E:{}: v={:08x}, p={:08x}, d={:08x}".format(self.count, v, p, d))
         self.encode(d)
-        self.predictor.update(int_to_float(i))
+        self.predictor.update(v)
         self.count += 1
 
     def encode(self, value):
-        if not (value & (1 << 31)):
-            # Positive value
-            zeros = count_zeros(value)
-            # top bit is zero, so count_zeros will always be between 1 and 32
-            sym = zeros - 1
-            # result: 0 <= sym <= 31
+        if value < 0:
+            sign = 1
+            value = -value
         else:
-            # Negative value
-            value = (value & 0xffffffff) ^ 0xffffffff
-            zeros = count_zeros(value)
-            # top bit is also now zero, so count_zeros will always be between 1 and 32
-            sym = 32 | (zeros - 1)
-            # result: 32 <= sym <= 63
-        log("- sym=0x{:02x}".format(sym))
-        self.rc.encode_sym(sym)
-        # First bit after zeros is (by definition) always 1, so no need to send it.
-        bits = 32 - zeros - 1 - self.spr
+            sign = 0
+        zeros = count_zeros(value) - 1
+        sym = (sign << 5) | zeros
+        bits = 30 - zeros
         if bits > 0:
-            value >>= self.spr
-            range = 1 << bits
-            log("- value=0x{:x} ({})".format(value ^ range, bits))
-            self.rc.encode_value(value ^ range, bits)
+            value &= (1 << bits) - 1
+            log("- sym={:02x} value={:08x} bits={}".format(sym, value, bits))
+            self.rc.encode_sym(sym)
+            self.rc.encode_value(value, bits)
+        else:
+            log("- sym={:02x} bits={}".format(sym, bits))
+            self.rc.encode_sym(sym)
 
     def done(self):
         self.rc.done()
 
 
-class Float_Decoder:
-    def __init__(self, infile, predictor, coder=None, spr=0):
+class IntZ_Decoder:
+    def __init__(self, infile, predictor, coder=None):
         self.predictor = predictor
         if coder:
             self.rc = coder
         else:
-            model = qsmodel.QSModel(64, MODEL_BITS, 2000, compress=False)
+            model = qsmodel.QSModel(63, MODEL_BITS, 2000, compress=False)
             self.rc = Decoder(infile, model)
-        self.spr = spr
-        self.spr_mask = 0xffffffff ^ ((1 << spr) - 1)
         self.count = 0
 
-    def decode_float(self):
-        p = float_to_int(self.predictor.next()) & self.spr_mask
+    def decode_int(self):
+        p = self.predictor.next()
         d = self.decode()
-        i = (p + d) & 0xffffffff
-        v = int_to_float(i)
-        log("D:{}: v={}, i={:08x}, p={:08x}, d={:08x}".format(self.count, v, i, p, d))
+        v = (p + d) & 0xffffffff
+        log("D:{}: v={:08x}, p={:08x}, d={:08x}".format(self.count, v, p, d))
         self.predictor.update(v)
         self.count += 1
         return v
 
     def decode(self):
         sym = self.rc.decode_sym()
-        log("- sym=0x{:02x}".format(sym))
-        sign = sym >> 5
-        zeros = (sym & 0x1f) + 1
-        bits = 32 - zeros - 1 - self.spr
-        log("- zeros={} bits={}".format(zeros, bits))
+        zeros = sym & 0x1f
+        bits = 30 - zeros
         if bits > 0:
-            range = 1 << bits
-            value = self.rc.decode_value(bits) | range
+            value = self.rc.decode_value(bits)
+            log("- sym={:02x} value={:08x} bits={}".format(sym, value, bits))
+            value |= (1 << bits)
         elif bits == 0:
             value = 1
         else:
             value = 0
-        value <<= self.spr
-        log("- value=0x{:x} ({})".format(value, bits))
-        if sign:
-            value ^= self.spr_mask
+        if sym & 0x20:
+            value = -value
         return value
+
+    def done(self):
+        self.rc.done()
+
+
+# IntSV -- Code small values as symbols, others as full 32-bit literal
+
+class IntSV_Encoder:
+    def __init__(self, outfile, predictor, coder=None):
+        self.predictor = predictor
+        if coder:
+            self.rc = coder
+        else:
+            model = qsmodel.QSModel(64, MODEL_BITS, 2000)
+            self.rc = Encoder(outfile, model)
+        self.count = 0
+
+    def encode_int(self, v):
+        p = self.predictor.next()
+        d = (v - p)
+        log("E:{}: v={:08x}, p={:08x}, d={:08x}".format(self.count, v, p, d))
+        self.encode(d)
+        self.predictor.update(v)
+        self.count += 1
+
+    def encode(self, value):
+        if value < 32 and value > -32:
+            log("- sym={:02x}".format(value + 31))
+            self.rc.encode_sym(value + 31)
+        else:
+            log("- sym={:02x} value={:08x}".format(63, value))
+            self.rc.encode_sym(63)
+            self.rc.encode_value(value & 0xffffffff, 32)
+
+    def done(self):
+        self.rc.done()
+
+
+class IntSV_Decoder:
+    def __init__(self, infile, predictor, coder=None):
+        self.predictor = predictor
+        if coder:
+            self.rc = coder
+        else:
+            model = qsmodel.QSModel(64, MODEL_BITS, 2000, compress=False)
+            self.rc = Decoder(infile, model)
+        self.count = 0
+
+    def decode_int(self):
+        p = self.predictor.next()
+        d = self.decode()
+        v = (p + d) & 0xffffffff
+        log("D:{}: v={:08x}, p={:08x}, d={:08x}".format(self.count, v, p, d))
+        self.predictor.update(v)
+        self.count += 1
+        return v
+
+    def decode(self):
+        sym = self.rc.decode_sym()
+        if sym < 63:
+            log("- sym={:02x}".format(sym))
+            return sym - 31
+        else:
+            value = self.rc.decode_value(32)
+            log("- sym={:02x} value={:08x}".format(sym, value))
+            return value
+
+    def done(self):
+        self.rc.done()
+
+
+# IntSVZ -- Code small values as symbols.  Others as zeros + literal
+
+class IntSVZ_Encoder:
+    def __init__(self, outfile, predictor, coder=None):
+        self.predictor = predictor
+        if coder:
+            self.rc = coder
+        else:
+            model = qsmodel.QSModel(128, MODEL_BITS, 2000)
+            self.rc = Encoder(outfile, model)
+        self.count = 0
+
+    def encode_int(self, v):
+        p = self.predictor.next()
+        d = (v - p)
+        log("E:{}: v={:08x}, p={:08x}, d={:08x}".format(self.count, v, p, d))
+        self.encode(d)
+        self.predictor.update(v)
+        self.count += 1
+
+    def encode(self, value):
+        if value < 32 and value > -33:
+            log("- sym={:02x}".format(value + 32))
+            self.rc.encode_sym(value + 32)
+        else:
+            # Value outside usual range.  Code it as leading-zeros + literal
+            if value < 0:
+                sign = 1
+                value = -value
+            else:
+                sign = 0
+            zeros = count_zeros(value)
+            sym = 0x40 | (sign << 5) | zeros
+            bits = 31 - zeros
+            value &= (1 << bits) - 1
+            log("- sym={:02x} value={:08x} bits={}".format(sym, value, bits))
+            self.rc.encode_sym(sym)
+            self.rc.encode_value(value, bits)
+
+    def done(self):
+        self.rc.done()
+
+
+class IntSVZ_Decoder:
+    def __init__(self, infile, predictor, coder=None):
+        self.predictor = predictor
+        if coder:
+            self.rc = coder
+        else:
+            model = qsmodel.QSModel(128, MODEL_BITS, 2000, compress=False)
+            self.rc = Decoder(infile, model)
+        self.count = 0
+
+    def decode_int(self):
+        p = self.predictor.next()
+        d = self.decode()
+        v = (p + d) & 0xffffffff
+        log("D:{}: v={:08x}, p={:08x}, d={:08x}".format(self.count, v, p, d))
+        self.predictor.update(v)
+        self.count += 1
+        return v
+
+    def decode(self):
+        sym = self.rc.decode_sym()
+        if sym < 0x40:
+            log("- sym={:02x}".format(sym))
+            return sym - 32
+        else:
+            zeros = sym & 0x1f
+            bits = 31 - zeros
+            value = self.rc.decode_value(bits)
+            log("- sym={:02x} value={:08x} bits={}".format(sym, value, 32 - zeros))
+            value |= (1 << bits)
+            if sym & 0x20:
+                value = -value
+            return value
 
     def done(self):
         self.rc.done()
@@ -283,31 +398,32 @@ class SuperSimplePredictor:
         self.last_value = value
 
 
-class SimpleLinearPredictor:
-    def __init__(self, initial_value=0.0, interval=1):
+class InterleavedSimplePredictor:
+    def __init__(self, stride, initial_value=0):
+        self.stride = stride
         self.initial_value = initial_value
-        self.interval = interval
         self.prev = []
 
     def next(self):
-        if not self.prev:
-            return self.initial_value
-        if len(self.prev) == 1:
-            return self.prev[0]
         try:
-            slope = (self.prev[-1] - self.prev[-(self.interval + 1)]) / self.interval
+            return self.prev[-self.stride]
         except IndexError:
-            slope = (self.prev[-1] - self.prev[0]) / len(self.prev - 1)
-        return self.prev[-1] + slope
+            # We don't have a previous value for this column yet
+            pass
+        try:
+            return self.prev[-1]
+        except IndexError:
+            # We don't have any previous values at all
+            return self.initial_value
 
     def update(self, value):
         self.prev.append(value)
-        if len(self.prev) > self.interval + 1:
+        if len(self.prev) > self.stride:
             del self.prev[0]
 
 
 class InterleavedLinearPredictor:
-    def __init__(self, stride, initial_value=0.0):
+    def __init__(self, stride, initial_value=0):
         self.stride = stride
         self.initial_value = initial_value
         self.prev = []
@@ -334,3 +450,6 @@ class InterleavedLinearPredictor:
         if len(self.prev) > self.stride * 2:
             del self.prev[0]
 
+
+Int_Encoder = IntZ_Encoder
+Int_Decoder = IntZ_Decoder
