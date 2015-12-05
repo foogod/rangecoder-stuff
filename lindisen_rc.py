@@ -98,7 +98,7 @@ class Decoder:
         return self.decode_freq(1 << bits)
 
     def update_literal(self, value, bits):
-        return self.update_freq(1, value, 1 << bits)
+        return self.update(1, value, 1 << bits)
 
     def done(self):
         pass
