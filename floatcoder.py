@@ -334,3 +334,220 @@ class InterleavedLinearPredictor:
         if len(self.prev) > self.stride * 2:
             del self.prev[0]
 
+
+class InterleavedTrapezoidPredictor:
+    def __init__(self, stride, initial_value=0.0):
+        self.stride = stride
+        self.initial_value = initial_value
+        self.prev = []
+
+    def next(self):
+        try:
+            return self.prev[-self.stride] + self.prev[-self.stride * 2] - self.prev[-self.stride * 3]
+        except IndexError:
+            # We don't have enough data in prev yet to calculate a trend
+            pass
+        try:
+            return self.prev[-self.stride]
+        except IndexError:
+            # We don't have even a single previous value for this column yet
+            pass
+        try:
+            return self.prev[-1]
+        except IndexError:
+            # We don't have any previous values at all
+            return self.initial_value
+
+    def update(self, value):
+        self.prev.append(value)
+        if len(self.prev) > self.stride * 3:
+            del self.prev[0]
+
+
+class InterleavedOrder2Predictor:
+    def __init__(self, stride, initial_value=0.0, weight=1.0):
+        self.stride = stride
+        self.initial_value = initial_value
+        self.weight = weight
+        self.prev = []
+
+    def next(self):
+        try:
+            delta = self.prev[-self.stride] - self.prev[-self.stride * 2]
+            try:
+                prev_delta = self.prev[-self.stride * 2] - self.prev[-self.stride * 3]
+            except IndexError:
+                # We have one stride's worth, but not 2.  Settle for simple
+                # linear result.
+                prev_delta = delta
+            delta = delta + ((delta - prev_delta) * self.weight)
+            return self.prev[-self.stride] + delta
+        except IndexError:
+            # We don't have enough data in prev yet to calculate a trend
+            pass
+        try:
+            return self.prev[-self.stride]
+        except IndexError:
+            # We don't have even a single previous value for this column yet
+            pass
+        try:
+            return self.prev[-1]
+        except IndexError:
+            # We don't have any previous values at all
+            return self.initial_value
+
+    def update(self, value):
+        self.prev.append(value)
+        if len(self.prev) > self.stride * 3:
+            del self.prev[0]
+
+
+class InterleavedAdjustedPredictor:
+    def __init__(self, stride, initial_value=0.0):
+        self.stride = stride
+        self.initial_value = initial_value
+        self.prev = []
+        self.guessed_delta = 0
+        self.corr_factor = 1.0
+        self.column = 0
+
+    def next(self):
+        try:
+            self.guessed_delta = self.prev[-self.stride] - self.prev[-self.stride * 2]
+            result = self.prev[-self.stride] + (self.guessed_delta * self.corr_factor)
+            log("P: prev={} delta={} corr_factor={}: result={}".format(self.prev[-self.stride], self.guessed_delta, self.corr_factor, result))
+            return result
+        except IndexError:
+            # We don't have enough data in prev yet to calculate a trend
+            pass
+        try:
+            return self.prev[-self.stride]
+        except IndexError:
+            # We don't have even a single previous value for this column yet
+            pass
+        try:
+            return self.prev[-1]
+        except IndexError:
+            # We don't have any previous values at all
+            return self.initial_value
+
+    def update(self, value):
+        self.column = (self.column + 1) % self.stride
+        if self.column:
+            try:
+                delta = value - self.prev[-self.stride]
+                self.corr_factor = delta / self.guessed_delta
+            except (ZeroDivisionError, IndexError):
+                self.corr_factor = 1.0
+        else:
+            self.corr_factor = 1.0
+        self.prev.append(value)
+        if len(self.prev) > self.stride * 2:
+            del self.prev[0]
+
+
+class MultiPredictor:
+    def __init__(self, *predictors):
+        self.predictors = predictors
+        self.nexts = None
+        self.freqs = [[0] * len(predictors) for p in predictors]
+        self.prev_best = 0
+        self.rescale_limit = len(predictors) ** 2 * 50
+        self.count = 0
+
+    def next(self):
+        self.nexts = [p.next() for p in self.predictors]
+        freqs = self.freqs[self.prev_best]
+        cur_max = 0
+        cur_i = 0
+        for i in xrange(len(freqs)):
+            if freqs[i] > cur_max:
+                cur_max = freqs[i]
+                cur_i = i
+        log("P: nexts={} chosen={}".format(self.nexts, cur_i))
+        self.chosen = cur_i
+        return self.nexts[cur_i]
+
+    def update(self, v):
+        for p in self.predictors:
+            p.update(v)
+        if self.count >= self.rescale_limit:
+            self.rescale()
+            self.count = 0
+        self.count += 1
+        cur_min = 1 << 32 #FIXME
+        cur_i = 0
+        for i in xrange(len(self.nexts)):
+            delta = abs(v - self.nexts[i])
+            if delta < cur_min:
+                cur_min = delta
+                cur_i = i
+        self.freqs[self.prev_best][cur_i] += 1
+        if cur_i == self.chosen:
+            log("P: chosen={} best={} (success!)".format(self.chosen, cur_i))
+        else:
+            log("P: chosen={} best={} (oops)".format(self.chosen, cur_i))
+        self.prev_best = cur_i
+
+    def rescale(self):
+        freqs = self.freqs
+        log("P: Rescaling:")
+        for i in xrange(len(freqs)):
+            log(" - {}: {}".format(i, freqs[i]))
+            for j in xrange(len(freqs[i])):
+                freqs[i][j] >>= 1
+
+
+class Multi2Predictor:
+    def __init__(self, *predictors):
+        self.predictors = predictors
+        self.nexts = None
+        self.freqs = [[[0] * len(predictors) for p in predictors] for p in predictors]
+        self.prev_best = [0, 0]
+        self.rescale_limit = len(predictors) ** 3 * 500
+        self.count = 0
+
+    def next(self):
+        self.nexts = [p.next() for p in self.predictors]
+        freqs = self.freqs[self.prev_best[0]][self.prev_best[1]]
+        cur_max = 0
+        cur_i = 0
+        for i in xrange(len(freqs)):
+            if freqs[i] > cur_max:
+                cur_max = freqs[i]
+                cur_i = i
+        log("P: nexts={} chosen={}".format(self.nexts, cur_i))
+        self.chosen = cur_i
+        return self.nexts[cur_i]
+
+    def update(self, v):
+        for p in self.predictors:
+            p.update(v)
+        if self.count >= self.rescale_limit:
+            self.rescale()
+            self.count = 0
+        self.count += 1
+        cur_min = 1 << 32 #FIXME
+        cur_i = 0
+        for i in xrange(len(self.nexts)):
+            delta = abs(v - self.nexts[i])
+            if delta < cur_min:
+                cur_min = delta
+                cur_i = i
+        self.freqs[self.prev_best[0]][self.prev_best[1]][cur_i] += 1
+        if cur_i == self.chosen:
+            log("P: chosen={} best={} (success!)".format(self.chosen, cur_i))
+        else:
+            log("P: chosen={} best={} (oops)".format(self.chosen, cur_i))
+        self.prev_best = [self.prev_best[1], cur_i]
+
+    def rescale(self):
+        freqs = self.freqs
+        log("P: Rescaling:")
+        for i in xrange(len(freqs)):
+            for j in xrange(len(freqs[i])):
+                log(" - [{}, {}]: {}".format(i, j, freqs[i][j]))
+                for k in xrange(len(freqs[i][j])):
+                    freqs[i][j][k] >>= 1
+
+

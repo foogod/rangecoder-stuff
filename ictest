@@ -31,7 +31,16 @@ if not args.count:
 
 print("Compressing {} ints (stride {}) from {!r} to {!r}...".format(args.count, args.interleave, args.infile, args.outfile))
 
-predictor = intcoder.InterleavedSimplePredictor(args.interleave)
+#predictor = intcoder.InterleavedSimplePredictor(args.interleave)
+predictor = intcoder.Multi2Predictor(
+        intcoder.InterleavedSimplePredictor(1),
+        intcoder.InterleavedSimplePredictor(2),
+        intcoder.InterleavedSimplePredictor(3),
+        #intcoder.InterleavedSimplePredictor(4),
+        #intcoder.InterleavedSimplePredictor(5),
+        #intcoder.InterleavedSimplePredictor(6),
+        intcoder.InterleavedLinearPredictor(2),
+)
 enc = intcoder.Int_Encoder(outfile, predictor)
 
 for i in xrange(args.count):
@@ -53,7 +62,16 @@ print("Verifying result...")
 infile = open(args.infile, 'rb')
 outfile = open(args.outfile, 'rb')
 
-predictor = intcoder.InterleavedSimplePredictor(args.interleave)
+#predictor = intcoder.InterleavedSimplePredictor(args.interleave)
+predictor = intcoder.Multi2Predictor(
+        intcoder.InterleavedSimplePredictor(1),
+        intcoder.InterleavedSimplePredictor(2),
+        intcoder.InterleavedSimplePredictor(3),
+        #intcoder.InterleavedSimplePredictor(4),
+        #intcoder.InterleavedSimplePredictor(5),
+        #intcoder.InterleavedSimplePredictor(6),
+        intcoder.InterleavedLinearPredictor(2),
+)
 dec = intcoder.Int_Decoder(outfile, predictor)
 
 for i in xrange(args.count):

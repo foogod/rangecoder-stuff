@@ -451,5 +451,106 @@ class InterleavedLinearPredictor:
             del self.prev[0]
 
 
+class MultiPredictor:
+    def __init__(self, *predictors):
+        self.predictors = predictors
+        self.nexts = None
+        self.freqs = [[0] * len(predictors) for p in predictors]
+        self.prev_best = 0
+        self.rescale_limit = len(predictors) ** 2 * 500
+        self.count = 0
+
+    def next(self):
+        self.nexts = [p.next() for p in self.predictors]
+        freqs = self.freqs[self.prev_best]
+        cur_max = 0
+        cur_i = 0
+        for i in xrange(len(freqs)):
+            if freqs[i] > cur_max:
+                cur_max = freqs[i]
+                cur_i = i
+        log("P: nexts={} chosen={}".format(self.nexts, cur_i))
+        return self.nexts[cur_i]
+
+    def update(self, v):
+        for p in self.predictors:
+            p.update(v)
+        if self.count >= self.rescale_limit:
+            self.rescale()
+            self.count = 0
+        self.count += 1
+        cur_min = 1 << 32 #FIXME
+        cur_i = 0
+        for i in xrange(len(self.nexts)):
+            delta = abs(v - self.nexts[i])
+            if delta < cur_min:
+                cur_min = delta
+                cur_i = i
+        self.freqs[self.prev_best][cur_i] += 1
+        log("P: actual_best={}".format(cur_i))
+        self.prev_best = cur_i
+
+    def rescale(self):
+        freqs = self.freqs
+        log("P: Rescaling:")
+        for i in xrange(len(freqs)):
+            log(" - {}: {}".format(i, freqs[i]))
+            for j in xrange(len(freqs[i])):
+                freqs[i][j] >>= 1
+
+
+class Multi2Predictor:
+    def __init__(self, *predictors):
+        self.predictors = predictors
+        self.nexts = None
+        self.freqs = [[[0] * len(predictors) for p in predictors] for p in predictors]
+        self.prev_best = [0, 0]
+        self.rescale_limit = len(predictors) ** 3 * 500
+        self.count = 0
+
+    def next(self):
+        self.nexts = [p.next() for p in self.predictors]
+        freqs = self.freqs[self.prev_best[0]][self.prev_best[1]]
+        cur_max = 0
+        cur_i = 0
+        for i in xrange(len(freqs)):
+            if freqs[i] > cur_max:
+                cur_max = freqs[i]
+                cur_i = i
+        log("P: nexts={} chosen={}".format(self.nexts, cur_i))
+        self.chosen = cur_i
+        return self.nexts[cur_i]
+
+    def update(self, v):
+        for p in self.predictors:
+            p.update(v)
+        if self.count >= self.rescale_limit:
+            self.rescale()
+            self.count = 0
+        self.count += 1
+        cur_min = 1 << 32 #FIXME
+        cur_i = 0
+        for i in xrange(len(self.nexts)):
+            delta = abs(v - self.nexts[i])
+            if delta < cur_min:
+                cur_min = delta
+                cur_i = i
+        self.freqs[self.prev_best[0]][self.prev_best[1]][cur_i] += 1
+        if cur_i == self.chosen:
+            log("P: chosen={} best={} (success!)".format(self.chosen, cur_i))
+        else:
+            log("P: chosen={} best={} (oops)".format(self.chosen, cur_i))
+        self.prev_best = [self.prev_best[1], cur_i]
+
+    def rescale(self):
+        freqs = self.freqs
+        log("P: Rescaling:")
+        for i in xrange(len(freqs)):
+            for j in xrange(len(freqs[i])):
+                log(" - [{}, {}]: {}".format(i, j, freqs[i][j]))
+                for k in xrange(len(freqs[i][j])):
+                    freqs[i][j][k] >>= 1
+
+
 Int_Encoder = IntZ_Encoder
 Int_Decoder = IntZ_Decoder

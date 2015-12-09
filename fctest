@@ -45,7 +45,13 @@ if not args.count:
 
 print("Compressing {} floats (stride {}) from {!r} to {!r}...".format(args.count, args.interleave, args.infile, args.outfile))
 
-predictor = floatcoder.InterleavedLinearPredictor(args.interleave)
+#predictor = floatcoder.InterleavedLinearPredictor(args.interleave)
+#predictor = floatcoder.InterleavedTrapezoidPredictor(args.interleave)
+predictor = floatcoder.MultiPredictor(
+    floatcoder.InterleavedLinearPredictor(3),
+    floatcoder.InterleavedOrder2Predictor(3, weight=1.0),
+    floatcoder.InterleavedTrapezoidPredictor(3),
+)
 enc = floatcoder.Float_Encoder(outfile, predictor, spr=args.spr)
 
 for i in xrange(args.count):
@@ -67,7 +73,13 @@ print("Verifying result...")
 infile = open(args.infile, 'rb')
 outfile = open(args.outfile, 'rb')
 
-predictor = floatcoder.InterleavedLinearPredictor(args.interleave)
+#predictor = floatcoder.InterleavedLinearPredictor(args.interleave)
+#predictor = floatcoder.InterleavedTrapezoidPredictor(args.interleave)
+predictor = floatcoder.MultiPredictor(
+    floatcoder.InterleavedLinearPredictor(3),
+    floatcoder.InterleavedOrder2Predictor(3, weight=1.0),
+    floatcoder.InterleavedTrapezoidPredictor(3),
+)
 dec = floatcoder.Float_Decoder(outfile, predictor, spr=args.spr)
 
 for i in xrange(args.count):
