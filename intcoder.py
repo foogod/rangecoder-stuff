@@ -20,6 +20,13 @@ def count_zeros(value):
         result -= 1
     return result
 
+def count_zeros64(value):
+    result = 64
+    while value:
+        value >>= 1
+        result -= 1
+    return result
+
 class EOFError (Exception):
     pass
 
@@ -387,6 +394,85 @@ class IntSVZ_Decoder:
         self.rc.done()
 
 
+class IntZ64_Encoder:
+    def __init__(self, outfile, predictor, coder=None):
+        self.predictor = predictor
+        if coder:
+            self.rc = coder
+        else:
+            model = qsmodel.QSModel(127, MODEL_BITS, 2000)
+            self.rc = Encoder(outfile, model)
+        self.count = 0
+
+    def encode_int(self, v):
+        p = self.predictor.next()
+        d = (v - p)
+        log("E:{}: v={:08x}, p={:08x}, d={:08x}".format(self.count, v, p, d))
+        self.encode(d)
+        self.predictor.update(v)
+        self.count += 1
+
+    def encode(self, value):
+        if value < 0:
+            sign = 1
+            value = -value
+        else:
+            sign = 0
+        zeros = count_zeros64(value) - 1
+        sym = (sign << 6) | zeros
+        bits = 62 - zeros
+        if bits > 0:
+            value &= (1 << bits) - 1
+            log("- sym={:02x} value={:08x} bits={}".format(sym, value, bits))
+            self.rc.encode_sym(sym)
+            self.rc.encode_value(value, bits)
+        else:
+            log("- sym={:02x} bits={}".format(sym, bits))
+            self.rc.encode_sym(sym)
+
+    def done(self):
+        self.rc.done()
+
+
+class IntZ64_Decoder:
+    def __init__(self, infile, predictor, coder=None):
+        self.predictor = predictor
+        if coder:
+            self.rc = coder
+        else:
+            model = qsmodel.QSModel(127, MODEL_BITS, 2000, compress=False)
+            self.rc = Decoder(infile, model)
+        self.count = 0
+
+    def decode_int(self):
+        p = self.predictor.next()
+        d = self.decode()
+        v = (p + d) & ((1 << 64) - 1)
+        log("D:{}: v={:08x}, p={:08x}, d={:08x}".format(self.count, v, p, d))
+        self.predictor.update(v)
+        self.count += 1
+        return v
+
+    def decode(self):
+        sym = self.rc.decode_sym()
+        zeros = sym & 0x3f
+        bits = 62 - zeros
+        if bits > 0:
+            value = self.rc.decode_value(bits)
+            log("- sym={:02x} value={:08x} bits={}".format(sym, value, bits))
+            value |= (1 << bits)
+        elif bits == 0:
+            value = 1
+        else:
+            value = 0
+        if sym & 0x40:
+            value = -value
+        return value
+
+    def done(self):
+        self.rc.done()
+
+
 class SuperSimplePredictor:
     def __init__(self, initial_value=0.0):
         self.last_value = initial_value
@@ -554,3 +640,6 @@ class Multi2Predictor:
 
 Int_Encoder = IntZ_Encoder
 Int_Decoder = IntZ_Decoder
+
+Int64_Encoder = IntZ64_Encoder
+Int64_Decoder = IntZ64_Decoder

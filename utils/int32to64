@@ -1,0 +1,32 @@
+#!/usr/bin/python
+from __future__ import division, print_function
+
+import os
+import struct
+import argparse
+
+input_fmt = 'I'
+output_fmt = 'Q'
+
+parser = argparse.ArgumentParser(description='Convert 32-bit raw integer data to 64-bit raw integer data')
+parser.add_argument('infile', metavar='INFILE', type=str, help='Input file (32-bit data)')
+parser.add_argument('outfile', metavar='OUTFILE', type=str, help='Output file (64-bit data)')
+parser.add_argument('--count', type=int, help='Number of ints to read from input')
+parser.add_argument('--shift', type=int, default=0, help='Number of bits to shift data while converting')
+
+args = parser.parse_args()
+
+input_fmt_size = struct.calcsize(input_fmt)
+
+infile = open(args.infile, 'rb')
+outfile = open(args.outfile, 'wb')
+
+if not args.count:
+    size = os.fstat(infile.fileno()).st_size
+    args.count = size // input_fmt_size
+
+print("Converting {} ints (shifting up {} bits) from {!r} to {!r}...".format(args.count, args.shift, args.infile, args.outfile))
+
+for i in xrange(args.count):
+    value = struct.unpack(input_fmt, infile.read(input_fmt_size))[0];
+    outfile.write(struct.pack(output_fmt, value << args.shift))

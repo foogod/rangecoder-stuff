@@ -7,7 +7,7 @@ import argparse
 
 import intcoder
 
-struct_fmt = 'I'
+struct_fmt = 'Q'
 
 parser = argparse.ArgumentParser(description='Test intcoder.py')
 parser.add_argument('infile', metavar='INFILE', type=str, help='Input file (raw data)')
@@ -41,7 +41,7 @@ predictor = intcoder.Multi2Predictor(
         #intcoder.InterleavedSimplePredictor(6),
         intcoder.InterleavedLinearPredictor(2),
 )
-enc = intcoder.Int_Encoder(outfile, predictor)
+enc = intcoder.Int64_Encoder(outfile, predictor)
 
 for i in xrange(args.count):
     value = struct.unpack(struct_fmt, infile.read(struct_fmt_size))[0];
@@ -72,7 +72,7 @@ predictor = intcoder.Multi2Predictor(
         #intcoder.InterleavedSimplePredictor(6),
         intcoder.InterleavedLinearPredictor(2),
 )
-dec = intcoder.Int_Decoder(outfile, predictor)
+dec = intcoder.Int64_Decoder(outfile, predictor)
 
 for i in xrange(args.count):
     infile_value = struct.unpack(struct_fmt, infile.read(struct_fmt_size))[0];
