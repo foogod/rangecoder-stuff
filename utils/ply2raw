@@ -1,0 +1,91 @@
+#!/usr/bin/python
+
+from __future__ import division, print_function
+
+import sys
+import struct
+
+struct_formats = {
+    'float': 'f',
+    'int': 'i',
+    'uchar': 'B',
+}
+
+def parse_elem(f, mode, elem):
+    result = {}
+    for prop in elem[2]:
+        if len(prop) < 3:
+            fmt = mode + struct_formats[prop[1]]
+            value = struct.unpack(fmt, f.read(struct.calcsize(fmt)))[0]
+        else:
+            fmt = mode + struct_formats[prop[2]]
+            count = struct.unpack(fmt, f.read(struct.calcsize(fmt)))[0]
+            fmt = mode + (struct_formats[prop[1]] * count)
+            value = struct.unpack(fmt, f.read(struct.calcsize(fmt)))
+        result[prop[0]] = value
+    return result
+
+infile = sys.argv[1]
+vertex_file = infile + '.vertex'
+index_file = infile + '.index'
+
+mode = None
+version = None
+elements = []
+elem = [None, None, []]
+with open(infile, 'rb') as f:
+    magic = f.readline().rstrip()
+    if magic != 'ply':
+        sys.stdout.write("ERROR: {} does not appear to be a PLY file\n".format(infile))
+        sys.exit(1)
+    while True:
+        headerline = f.readline().split()
+        print(headerline)
+        if headerline == ['end_header']:
+            break
+        if headerline[0] == 'format':
+            mode = headerline[1]
+            version = headerline[2]
+        elif headerline[0] == 'element':
+            elem = [headerline[1], int(headerline[2]), []]
+            elements.append(elem)
+        elif headerline[0] == 'property':
+            if headerline[1] == 'list':
+                elem[2].append([headerline[4], headerline[3], headerline[2]])
+            else:
+                elem[2].append([headerline[2], headerline[1]])
+
+    if mode == 'binary_little_endian':
+        mode = '<'
+    elif mode == 'binary_big_endian':
+        mode = '>'
+    else:
+        sys.stdout.write("ERROR: Unsupported data encoding mode: {!r}\n".format(mode))
+        sys.exit(1)
+    if version != '1.0':
+        sys.stdout.write("ERROR: Unrecognized PLY version: {!r}\n".format(version))
+        sys.exit(1)
+
+    for elem in elements:
+        count = elem[1]
+        if elem[0] == 'vertex':
+            print("Writing vertices to {}...".format(vertex_file))
+            with open(vertex_file, 'wb') as outf:
+                for i in xrange(count):
+                    edata = parse_elem(f, mode, elem)
+                    outf.write(struct.pack('fff', edata['x'], edata['y'], edata['z']))
+        elif elem[0] == 'face':
+            print("Writing indices to {}...".format(index_file))
+            with open(index_file, 'wb') as outf:
+                for i in xrange(count):
+                    edata = parse_elem(f, mode, elem)
+                    tri_data = edata['vertex_indices']
+                    if len(tri_data) != 3:
+                        sys.stdout.write("WARNING: primitive is not a triangle (skipped): {}\n".format(tri_data))
+                    else:
+                        outf.write(struct.pack('III', *tri_data))
+        else:
+            print("(skipping {!r} data...)".format(elem[0]))
+            for i in xrange(count):
+                parse_elem(f, mode, elem)
+

@@ -1,0 +1,65 @@
+#!/usr/bin/python
+from __future__ import division, print_function
+
+import os
+import struct
+import argparse
+
+import floatcoder
+
+struct_fmt = 'f'
+
+parser = argparse.ArgumentParser(description='Test floatcoder.py')
+parser.add_argument('infile', metavar='INFILE', type=str, help='Input file (raw data)')
+parser.add_argument('outfile', metavar='OUTFILE', type=str, help='Output file (centered data)')
+parser.add_argument('--count', type=int, help='Number of floats to read from input')
+parser.add_argument('--x', type=float, default=0.0, help='X offset to add to center')
+parser.add_argument('--y', type=float, default=0.0, help='Y offset to add to center')
+parser.add_argument('--z', type=float, default=0.0, help='Z offset to add to center')
+
+args = parser.parse_args()
+
+struct_fmt_size = struct.calcsize(struct_fmt)
+
+infile = open(args.infile, 'rb')
+
+if not args.count:
+    size = os.fstat(infile.fileno()).st_size
+    args.count = size // struct_fmt_size
+
+num_points = args.count // 3
+
+mins = [None, None, None]
+maxs = [None, None, None]
+avgs = [0, 0, 0]
+for i in xrange(num_points):
+    for j in xrange(3):
+        value = struct.unpack(struct_fmt, infile.read(struct_fmt_size))[0];
+        if i == 0:
+            mins[j] = value
+            maxs[j] = value
+        else:
+            mins[j] = min(mins[j], value)
+            maxs[j] = max(maxs[j], value)
+        avgs[j] += (value - avgs[j]) / (i+1)
+
+infile.close()
+
+print("Min: {}".format(mins))
+print("Avg: {}".format(avgs))
+print("Max: {}".format(maxs))
+print("Range: {}".format([maxs[i] - mins[i] for i in xrange(3)]))
+
+infile = open(args.infile, 'rb')
+outfile = open(args.outfile, 'wb')
+
+offsets = [args.x, args.y, args.z]
+
+for i in xrange(num_points):
+    for j in xrange(3):
+        value = struct.unpack(struct_fmt, infile.read(struct_fmt_size))[0]
+        value -= avgs[j] - offsets[j]
+        outfile.write(struct.pack(struct_fmt, value))
+
+infile.close()
+outfile.close()
