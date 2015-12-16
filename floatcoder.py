@@ -2,6 +2,7 @@ from __future__ import division
 
 import qsmodel
 import struct
+import intcoder
 
 import sys
 
@@ -42,6 +43,9 @@ def flint_untrans(i):
     return i
 
 class EOFError (Exception):
+    pass
+
+class FloatEncodingError (Exception):
     pass
 
 class Encoder:
@@ -563,6 +567,65 @@ class Float_Decoder_DPR:
 
     def done(self):
         self.rc.done()
+
+
+class FloatInt_Encoder:
+    def __init__(self, outfile, predictor, coder=None, min_exp=-16):
+        self.intcoder = intcoder.Int64_Encoder(outfile, predictor, coder=coder)
+        self.min_exp = min_exp
+        self.count = 0
+
+    def encode_float(self, v):
+        i = float_to_int(v)
+        sign = i >> 31
+        exp = ((i >> 23) & 0xff) - 0x7f
+        mant = (i & ((1 << 23) - 1)) | (1 << 23)
+        shift = exp - self.min_exp
+        if shift >= (64 - 23):
+            raise FloatEncodingError("Exponent too large (exp={} max={})".format(exp, self.min_exp + (64 - 23) - 1))
+        if shift < 0:
+            iv = mant >> -shift
+        else:
+            iv = mant << shift
+        if sign:
+            iv ^= (1 << 64) - 1
+        log("E:{}: v={} i={:08x} exp={} shift={} iv={:016x}".format(self.count, v, i, exp, shift, iv))
+        self.intcoder.encode_int(iv)
+        self.count += 1
+
+    def done(self):
+        self.intcoder.done()
+
+
+class FloatInt_Decoder:
+    def __init__(self, infile, predictor, coder=None, min_exp=-16):
+        self.intcoder = intcoder.Int64_Decoder(infile, predictor, coder=coder)
+        self.min_exp = min_exp
+        self.count = 0
+
+    def decode_float(self):
+        iv = self.intcoder.decode_int()
+        if iv & (1 << 63):
+            sign = 1
+            iv ^= (1 << 64) - 1
+        else:
+            sign = 0
+        bits = 64 - intcoder.count_zeros64(iv)
+        shift = bits - 24
+        if shift < 0:
+            mant = iv << -shift
+        else:
+            mant = iv >> shift
+        mant &= (1 << 23) - 1
+        exp = shift + self.min_exp
+        i = (sign << 31) | ((exp + 0x7f) << 23) | mant
+        v = int_to_float(i)
+        log("D:{}: v={} i={:08x} exp={} shift={} iv={:016x}".format(self.count, v, i, exp, shift, iv))
+        self.count += 1
+        return v
+
+    def done(self):
+        self.intcoder.done()
 
 
 class SuperSimplePredictor:

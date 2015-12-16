@@ -413,9 +413,10 @@ class IntZ64_Encoder:
         self.count += 1
 
     def encode(self, value):
-        if value < 0:
+        value &= (1 << 64) - 1
+        if value & (1 << 63):
             sign = 1
-            value = -value
+            value = -value & ((1 << 64) - 1)
         else:
             sign = 0
         zeros = count_zeros64(value) - 1
