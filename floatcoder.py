@@ -185,17 +185,18 @@ class Decoder:
 
 
 class Float_Encoder:
-    def __init__(self, outfile, predictor, coder=None):
+    def __init__(self, outfile, predictor, coder=None, offset=0.0):
         self.predictor = predictor
         if coder:
             self.rc = coder
         else:
             model = qsmodel.QSModel(64, MODEL_BITS, 2000)
             self.rc = Encoder(outfile, model)
+        self.offset = offset
         self.count = 0
 
     def encode_float(self, v):
-        i = float_to_int(v)
+        i = float_to_int(v + self.offset)
         #FIXME: eventually need to convert to int prior to prediction step (for portability)
         p = flint_trans(float_to_int(self.predictor.next()))
         i = flint_trans(i)
@@ -233,13 +234,14 @@ class Float_Encoder:
 
 
 class Float_Decoder:
-    def __init__(self, infile, predictor, coder=None):
+    def __init__(self, infile, predictor, coder=None, offset=0.0):
         self.predictor = predictor
         if coder:
             self.rc = coder
         else:
             model = qsmodel.QSModel(64, MODEL_BITS, 2000, compress=False)
             self.rc = Decoder(infile, model)
+        self.offset = offset
         self.count = 0
 
     def decode_float(self):
@@ -247,8 +249,9 @@ class Float_Decoder:
         d = self.decode()
         i = (p + d) & 0xffffffff
         v = int_to_float(flint_untrans(i))
-        log("D:{}: v={}, i={:08x}, p={:08x}, d={:08x}".format(self.count, v, i, p, d))
         self.predictor.update(v)
+        v -= self.offset
+        log("D:{}: v={}, i={:08x}, p={:08x}, d={:08x}".format(self.count, v, i, p, d))
         self.count += 1
         return v
 
@@ -276,13 +279,14 @@ class Float_Decoder:
 
 
 class Float_Encoder_SPR:
-    def __init__(self, outfile, predictor, coder=None, spr=0):
+    def __init__(self, outfile, predictor, coder=None, offset=0.0, spr=0):
         self.predictor = predictor
         if coder:
             self.rc = coder
         else:
             model = qsmodel.QSModel(64, MODEL_BITS, 2000)
             self.rc = Encoder(outfile, model)
+        self.offset = offset
         self.spr = spr
         self.spr_mask = 0xffffffff ^ ((1 << spr) - 1)
         self.count = 0
@@ -290,7 +294,7 @@ class Float_Encoder_SPR:
     def encode_float(self, v):
         #FIXME: eventually need to convert to int prior to prediction step (for portability)
         p = float_to_int(self.predictor.next()) & self.spr_mask
-        i = float_to_int(v) & self.spr_mask
+        i = float_to_int(v + self.offset) & self.spr_mask
         d = (i - p) & 0xffffffff
         log("E:{}: v={}, i={:08x}, p={:08x}, d={:08x}".format(self.count, v, i, p, d))
         self.encode(d)
@@ -326,13 +330,14 @@ class Float_Encoder_SPR:
 
 
 class Float_Decoder_SPR:
-    def __init__(self, infile, predictor, coder=None, spr=0):
+    def __init__(self, infile, predictor, coder=None, offset=0.0, spr=0):
         self.predictor = predictor
         if coder:
             self.rc = coder
         else:
             model = qsmodel.QSModel(64, MODEL_BITS, 2000, compress=False)
             self.rc = Decoder(infile, model)
+        self.offset = offset
         self.spr = spr
         self.spr_mask = 0xffffffff ^ ((1 << spr) - 1)
         self.count = 0
@@ -342,8 +347,9 @@ class Float_Decoder_SPR:
         d = self.decode()
         i = (p + d) & 0xffffffff
         v = int_to_float(i)
-        log("D:{}: v={}, i={:08x}, p={:08x}, d={:08x}".format(self.count, v, i, p, d))
         self.predictor.update(v)
+        v -= self.offset
+        log("D:{}: v={}, i={:08x}, p={:08x}, d={:08x}".format(self.count, v, i, p, d))
         self.count += 1
         return v
 
@@ -372,18 +378,19 @@ class Float_Decoder_SPR:
 
 
 class Float_Encoder_DPR:
-    def __init__(self, outfile, predictor, coder=None, dpr=None):
+    def __init__(self, outfile, predictor, coder=None, offset=0.0, dpr=None):
         self.predictor = predictor
         if coder:
             self.rc = coder
         else:
             model = qsmodel.QSModel(65, MODEL_BITS, 2000)
             self.rc = Encoder(outfile, model)
+        self.offset = offset
         self.dpr = dpr
         self.count = 0
 
     def encode_float(self, v):
-        i = float_to_int(v)
+        i = float_to_int(v + self.offset)
         dpr_exp = ((i >> 23) & 0xff) - 0x7f
         log("-- dpr_exp={}".format(dpr_exp))
         if dpr_exp > 0x7f:
@@ -417,7 +424,6 @@ class Float_Encoder_DPR:
             d_exp = (p_exp - i_exp) & 0xff800000
             d_mant = (p_mant - i_mant) & 0x007fffff
         d = d_exp | d_mant
-        #d = (i - p) & 0xffffffff
         log("E:{}: v={}, i={:08x}/{:08x}:{:08x}, p={:08x}/{:08x}:{:08x}, d={:08x}/{:08x}:{:08x}".format(self.count, v, i, i_exp, i_mant, p, p_exp, p_mant, d, d_exp, d_mant))
         self.encode(sign, d, trim_bits)
         pu = int_to_float(flint_untrans(i) & trim_mask)
@@ -473,13 +479,14 @@ class Float_Encoder_DPR:
 
 
 class Float_Decoder_DPR:
-    def __init__(self, infile, predictor, coder=None, dpr=None):
+    def __init__(self, infile, predictor, coder=None, offset=0.0, dpr=None):
         self.predictor = predictor
         if coder:
             self.rc = coder
         else:
             model = qsmodel.QSModel(65, MODEL_BITS, 2000, compress=False)
             self.rc = Decoder(infile, model)
+        self.offset = offset
         self.dpr = dpr
         self.count = 0
 
@@ -501,9 +508,10 @@ class Float_Decoder_DPR:
         i = i_exp | i_mant
         #i = (p + d) & 0xffffffff
         v = int_to_float(flint_untrans(i) & trim_mask)
-        log("D:{}: v={}, i={:08x}/{:08x}:{:08x}, p={:08x}/{:08x}:{:08x}, d={:08x}/{:08x}:{:08x}".format(self.count, v, i, i_exp, i_mant, p, p_exp, p_mant, d, d_exp, d_mant))
         log("! updating predictor with: {}".format(v))
         self.predictor.update(v)
+        v -= self.offset
+        log("D:{}: v={}, i={:08x}/{:08x}:{:08x}, p={:08x}/{:08x}:{:08x}, d={:08x}/{:08x}:{:08x}".format(self.count, v, i, i_exp, i_mant, p, p_exp, p_mant, d, d_exp, d_mant))
         self.count += 1
         return v
 
@@ -570,13 +578,14 @@ class Float_Decoder_DPR:
 
 
 class FloatInt_Encoder:
-    def __init__(self, outfile, predictor, coder=None, min_exp=-16):
+    def __init__(self, outfile, predictor, coder=None, offset=0.0, min_exp=-16):
         self.intcoder = intcoder.Int64_Encoder(outfile, predictor, coder=coder)
+        self.offset = offset
         self.min_exp = min_exp
         self.count = 0
 
     def encode_float(self, v):
-        i = float_to_int(v)
+        i = float_to_int(v + self.offset)
         sign = i >> 31
         exp = ((i >> 23) & 0xff) - 0x7f
         mant = (i & ((1 << 23) - 1)) | (1 << 23)
@@ -598,8 +607,9 @@ class FloatInt_Encoder:
 
 
 class FloatInt_Decoder:
-    def __init__(self, infile, predictor, coder=None, min_exp=-16):
+    def __init__(self, infile, predictor, coder=None, offset=0.0, min_exp=-16):
         self.intcoder = intcoder.Int64_Decoder(infile, predictor, coder=coder)
+        self.offset = offset
         self.min_exp = min_exp
         self.count = 0
 
@@ -619,7 +629,7 @@ class FloatInt_Decoder:
         mant &= (1 << 23) - 1
         exp = shift + self.min_exp
         i = (sign << 31) | ((exp + 0x7f) << 23) | mant
-        v = int_to_float(i)
+        v = int_to_float(i) - self.offset
         log("D:{}: v={} i={:08x} exp={} shift={} iv={:016x}".format(self.count, v, i, exp, shift, iv))
         self.count += 1
         return v
